@@ -1,5 +1,6 @@
 import os
 import re
+
 from tqdm import tqdm
 
 import pandas as pd
@@ -8,13 +9,14 @@ from itertools import combinations
 from sklearn.preprocessing import MinMaxScaler
 from scipy import stats
 import bioframe as bf
+from scipy.stats import linregress
 
 from io import StringIO
 from Bio import Phylo
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.optimize import curve_fit
+
 
 sns.set_style("whitegrid")
 sns.set_context("paper")
@@ -119,15 +121,24 @@ def get_equal_tad_count_syn_blocks(tad_count, species):
     return count_diff_df.loc[
         (count_diff_df["count_diff"] == 0) & (count_diff_df["count_s1"] != 0), "aln"].values.tolist()
 
-def get_equal_tad_count_syn_blocks(tad_count, species):
+def prepare_gene_coords(gene_coords, species_name, gene_inters):
+        coords = pd.DataFrame(gene_coords[species_name])
+        coords['gene_name'] = coords['gene_name'].str.split('_').str[0]
+        coords = coords[coords['gene_name'].isin(gene_inters)]
 
-    s1_count = tad_count.loc[(tad_count.species == species[0])]
-    s2_count = tad_count.loc[(tad_count.species == species[1])]
-    count_diff = s1_count["count"] - s2_count["count"]
-    count_diff_df = pd.DataFrame({"aln": s1_count.aln, "count_s1": s1_count["count"],
-                                  "count_s2": s2_count["count"], "count_diff": count_diff})
-    return count_diff_df.loc[
-        (count_diff_df["count_diff"] == 0) & (count_diff_df["count_s1"] != 0), "aln"].values.tolist()
+        coords.loc[coords['strand'] == '+', 'end'] = coords['start'] + 1
+        coords.loc[coords['strand'] == '-', 'start'] = coords['end']
+        coords.loc[coords['strand'] == '-', 'end'] = coords['end'] + 1
+
+        coords['chrom'] = 'chr' + coords['chrom'].astype(str)
+        return coords
+
+def prepare_tads_for_species(tads, species_name, aln_number):
+    strand = tads.loc[(tads.species == species_name) & (tads.aln == aln_number), "strand"].values[0]
+    tad_df = tads.loc[(tads.species == species_name) & (tads.aln == aln_number)].sort_values(
+        by=['start'], ascending=(strand != "-")).reset_index(drop=True)
+    tad_df['tad_number'] = tad_df.index + 1
+    return tad_df
 
 def map_tad_boundaries(comb_df, syn_block, species):
     filtered_tad_coord = comb_df[
@@ -143,6 +154,7 @@ def map_tad_boundaries(comb_df, syn_block, species):
 
     scaler = MinMaxScaler(feature_range=(0, 1))
     sb = tad_s1['aln'].unique()
+
     s1_map = [
         np.unique(
             scaler.fit_transform(
@@ -158,9 +170,9 @@ def map_tad_boundaries(comb_df, syn_block, species):
     s2_map = [
         np.unique(
             scaler.fit_transform(
-                tad_s2.loc[tad_s2['aln'] == block, ['start', 'end']]
+                (tad_s2.loc[tad_s2['aln'] == block, ['start', 'end']]
                 .sort_values(by='start')
-                .values.flatten().reshape(-1, 1)
+                .values.flatten().reshape(-1, 1))
             )
         )[1:-1].tolist()
         for block in sb
@@ -175,28 +187,43 @@ def map_tad_boundaries(comb_df, syn_block, species):
     p_val = res.pvalue
     return r2, p_val
 
-def prepare_gene_coords(gene_coords, species_name, gene_inters):
-        coords = pd.DataFrame(gene_coords[species_name])
-        coords['gene_name'] = coords['gene_name'].str.split('_').str[0]
-        coords = coords[coords['gene_name'].isin(gene_inters)]
+def compute_delta_borders(comb_df, syn_block, species):
 
-        coords.loc[coords['strand'] == '+', 'end'] = coords['start'] + 1
-        coords.loc[coords['strand'] == '-', 'start'] = coords['end']
-        coords.loc[coords['strand'] == '-', 'end'] = coords['end'] + 1
+    # Filter TAD coordinates based on synteny block and species
+    filtered_tad_coord = comb_df[
+        (comb_df["aln"].isin(syn_block)) &
+        (comb_df["species"].isin(species))
+        ].copy()
 
-        coords['chrom'] = 'chr' + coords['chrom'].astype(str)
-        return coords
+    chr_y = filtered_tad_coord.loc[filtered_tad_coord.chrom == "chrY", "aln"].unique()
+    filtered_tad_coord = filtered_tad_coord[~filtered_tad_coord['aln'].isin(chr_y)]
 
-def prepare_tads_for_species(tads, species_name, aln_number):
-        strand = tads.loc[(tads.species == species_name) & (tads.aln == aln_number), "strand"].values[0]
-        tad_df = tads.loc[(tads.species == species_name) & (tads.aln == aln_number)].sort_values(
-            by=['start'], ascending=(strand != "-")).reset_index(drop=True)
-        tad_df['tad_number'] = tad_df.index + 1
-        return tad_df
+    tad_s1 = filtered_tad_coord.loc[(filtered_tad_coord.species == species[0]), ["start", "end", "aln"]]
+    tad_s2 = filtered_tad_coord.loc[(filtered_tad_coord.species == species[1]), ["start", "end", "aln"]]
+
+    # Sort and drop duplicates
+    tad_s1 = tad_s1.sort_values(by=['aln', 'start']).drop_duplicates(['aln', 'start', 'end'])
+    tad_s2 = tad_s2.sort_values(by=['aln', 'start']).drop_duplicates(['aln', 'start', 'end'])
+
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    deltas = []
+    block = tad_s1['aln'].unique()[0]
+    block_tad_s1 = np.unique(tad_s1.loc[tad_s1['aln'] == block, ['start', 'end']].sort_values(by='start').values.flatten()).reshape(-1, 1)
+    block_tad_s2 = np.unique(tad_s2.loc[tad_s2['aln'] == block, ['start', 'end']].sort_values(by='start').values.flatten()).reshape(-1, 1)
+
+    if len(block_tad_s1) > 1:
+
+        # Scale boundaries within each block
+        scaled_tad_s1 = scaler.fit_transform(block_tad_s1)
+        scaled_tad_s2 = scaler.fit_transform(block_tad_s2)
+        for s1, s2 in zip(scaled_tad_s1, scaled_tad_s2):
+            if s1!=0 and s1!=1:
+                delta = abs(s1[0] - s2[0])
+                deltas.append(delta)
+
+    return np.median(deltas)
 
 def calculate_gene_per_tad(s1,s2,genes_in_aln,gene_coords,tads,aln_number,max_length):
-    score = 0
-
     gene_inters = set(genes_in_aln[s1].str.split('_').str[0]).intersection(
         set(genes_in_aln[s2].str.split('_').str[0]))
     gene_inters.discard('-')
@@ -220,9 +247,10 @@ def calculate_gene_per_tad(s1,s2,genes_in_aln,gene_coords,tads,aln_number,max_le
         merged_df = pd.merge(gene_tad_overlap_s1, gene_tad_overlap_s2,
                              on=['gene_name_', 'tad_number'], how='inner')
 
-        # score = len(merged_df) / len(gene_inters)
+        max_genes = max(len(genes_in_aln[s1]),len(genes_in_aln[s2]))
+        return len(merged_df)/max_length, max_genes
 
-    return len(merged_df)/max_length
+    return 0,0
 
 def calculate_edit_per_block(s1,s2,genes_in_aln,gene_coords,tads,aln_number,max_length):
 
@@ -255,8 +283,9 @@ def calculate_edit_per_block(s1,s2,genes_in_aln,gene_coords,tads,aln_number,max_
             key1 < key2 and len(value1 & value2) > 0)
 
         total_edits = deletions + insertions
-
-        return total_edits/max_length
+        n_borders = max(len(tad_s1),len(tad_s2))
+        return total_edits/max_length,n_borders+1
+    else: return None,None
 
 def get_divergence_time(species1, species2, tree):
     clade1 = tree.find_any(name=species1)
@@ -276,9 +305,12 @@ def load_species_data(newick_str,aln_code, coord_path):
     species_coords = {f: read_coord_file(os.path.join(coord_path, f + ".coord")) for f in species_list}
     return tree,species_list, tad_sb_df, tad_sb_coord_df, species_coords
 
-def finalize_rates(rate_dict, div_time_dict, col_name):
-    # rate_dict = {key: np.mean(value) for key, value in rate_dict.items() if value}
-    rate_dict = {key: np.nanmedian(value) for key, value in rate_dict.items() if value}
+def finalize_rates(rate_dict, div_time_dict, col_name,type):
+    if type == "conformation":
+        rate_dict = {key: np.mean(value) for key, value in rate_dict.items() if value}
+    else:
+        rate_dict = {key: np.nanmedian(value) for key, value in rate_dict.items() if value}
+
     rate_df = pd.DataFrame.from_dict(rate_dict, orient='index', columns=[col_name])
     rate_df['divergence_time'] = rate_df.index.map(div_time_dict)
     return rate_df
@@ -287,23 +319,18 @@ def calculate_rates(type,tad_sb_df,tad_sb_coord_df,species,tree,sb_coord,species
 
     comb = list(combinations(species, 2))
     div_time_dict = {}
-    total_rate_per_pair = {i: [] for i in comb}
     rate_per_mb = {i: [] for i in comb}
-
-    # if type not in ["number","borders","conformation","edits"] :
-    #     print(f"ERROR Feature specified {type} is wrong")
-    #     exit()
+    density = {i: [] for i in comb}
 
     for aln in tqdm(tad_sb_df["aln"].unique()[:], desc="Block analysed", colour="green"):
         for species1, species2 in comb[:]:
-
+            count_rate_diff = None
             sb_len_s1 = sb_coord.loc[(sb_coord['species'] == species1) & (sb_coord['aln'] == aln), "sb_length"].values[
                 0] / 1e6
             sb_len_s2 = sb_coord.loc[(sb_coord['species'] == species2) & (sb_coord['aln'] == aln), "sb_length"].values[
                 0] / 1e6
             max_length = max(sb_len_s1,sb_len_s2)
 
-            rate = None
             div_time = get_divergence_time(species1, species2, tree)
             if div_time == 0: continue
             div_time_dict[(species1, species2)] = div_time
@@ -322,9 +349,10 @@ def calculate_rates(type,tad_sb_df,tad_sb_coord_df,species,tree,sb_coord,species
                                                ((tad_sb_coord_df['species'] == species1) |
                                                 (tad_sb_coord_df['species'] == species2))
                                                ]
-                    if len(tads) > 4 and species1 in tads['species'].values and species2 in tads['species'].values:
-                        r2, pval = map_tad_boundaries(tads, syn_block, (species1,species2))
-                        count_rate_diff = (1 - r2) + 1e-10
+                    if (len(tads[tads['species']==species1]) >= 3) and (species1 in tads['species'].values) and (species2 in tads['species'].values):
+                        count_rate_diff = compute_delta_borders(tads, syn_block, (species1,species2))
+                        # r2, pval = map_tad_boundaries(tads, syn_block, (species1,species2))
+                        # count_rate_diff = 1 - r2
 
             elif type == "conformation":
                 syn_block = get_equal_tad_count_syn_blocks(tad_sb_df, (species1, species2))
@@ -335,9 +363,9 @@ def calculate_rates(type,tad_sb_df,tad_sb_coord_df,species,tree,sb_coord,species
                                                ((tad_sb_coord_df['species'] == species1) |
                                                 (tad_sb_coord_df['species'] == species2))
                                                ]
-                    sim_score,count = calculate_gene_per_tad(species1, species2, genes_in_aln, species_coords, tads, aln,max_length)
-                    rate = (1 - sim_score) / div_time if div_time > 0 else 0
-                    count_rate_diff = 1 - sim_score
+                    if len(tads[tads['species'] == species1]) >= 2 :
+                        count_rate_diff,n_genes = calculate_gene_per_tad(species1, species2, genes_in_aln, species_coords, tads, aln,max_length)
+                        density[(species1, species2)].append(n_genes/max_length)
 
             elif type == "edits":
                 genes_in_aln = df[aln].dropna()
@@ -345,39 +373,69 @@ def calculate_rates(type,tad_sb_df,tad_sb_coord_df,species,tree,sb_coord,species
                                            ((tad_sb_coord_df['species'] == species1) |
                                             (tad_sb_coord_df['species'] == species2))]
 
-                if len(tads) >= 4 and species1 in tads['species'].values and species2 in tads['species'].values:
-                    edits = calculate_edit_per_block(species1, species2, genes_in_aln, species_coords, tads, aln,max_length)
-                    if edits is not None:
-                        rate = edits / div_time
-                        count_rate_diff = edits
+                if ((len(tads[tads['species']==species1]) > 3 and  species2 in tads['species'].values) or
+                        (len(tads[tads['species']==species2]) > 3 and  species1 in tads['species'].values)) :
+                    count_rate_diff,n_borders = calculate_edit_per_block(species1, species2, genes_in_aln, species_coords, tads, aln,max_length)
+                    if n_borders is not None: density[(species1, species2)].append(n_borders/max_length)
 
-            if rate is not None: rate_per_mb[(species1, species2)].append(count_rate_diff)
+            if count_rate_diff is not None: rate_per_mb[(species1, species2)].append(count_rate_diff)
 
-    rate_per_mb = finalize_rates(rate_per_mb, div_time_dict, 'TAD_diff_per_mb')
-    return rate_per_mb, div_time_dict
+    rate_per_mb = finalize_rates(rate_per_mb, div_time_dict, 'TAD_diff_per_mb',type)
+    if type in ["conformation","edits"]:
+        return rate_per_mb, div_time_dict,density
+    else:
+        return rate_per_mb, div_time_dict
 
-def plt_result(rate_per_mb,mode):
-    def power_law(x, a, b):
-        return a * x ** b
+def plt_result(rate_per_mb, plot_type, line_length=40):
 
-    rate_per_mb = rate_per_mb.dropna()
     x = rate_per_mb['divergence_time']
     y = rate_per_mb['TAD_diff_per_mb']
 
+    categories = {"Mammals": ["#CB1B16",rate_per_mb.loc[rate_per_mb['divergence_time'] < 100]],
+                  'Tetrapoda': ["#980E11",rate_per_mb.loc[(rate_per_mb['divergence_time'] >= 100) & (rate_per_mb['divergence_time'] <= 320)]],
+                  'Vertebrates': ["#65010C",rate_per_mb.loc[rate_per_mb['divergence_time'] > 320]]}
 
-    plt.figure(figsize=(10, 6))
-    plt.scatter(x, y, color='blue', alpha=0.7, label='Data Points')
-    if type== "number":
-        params, covariance = curve_fit(power_law, x, y)
-        x_fit = np.linspace(min(x), max(x), 100)
-        y_fit = power_law(x_fit, *params)
-        plt.plot(x_fit, y_fit, color='red', label='Power Law Fit')
+    plt.figure(figsize=(6.4, 4.8))
 
-    plt.xlabel('Divergence Time (Million Years)')
-    plt.ylabel(f'TAD {type} per Mbp')
-    plt.title('TAD Difference per Mbp vs Divergence Time')
+    slope, intercept, r_value, p_value, std_err = linregress(x, y)
+    x_fit = np.linspace(x.min(), x.max(), 100)
+    y_fit = slope * x_fit + intercept
+    if type == "number":
+        plt.plot(x_fit, y_fit, color='red', linestyle='--', label=f'Linear Fit', linewidth=2.5,zorder=1)
+        # plt.plot(x_fit, y_fit, color='red', linestyle='--', label=f'Linear Fit (slope={slope:.2f})', linewidth=2.5)
+
+    else:
+        mean_div_times = []
+        mean_tad_diffs = []
+        added_label = False
+        for category, df in categories.items():
+            if not df[1].empty:
+                mean_div_time = df[1]['divergence_time'].mean()
+                mean_tad_diff = df[1]['TAD_diff_per_mb'].median()
+
+                plt.hlines(mean_tad_diff, mean_div_time - line_length / 2, mean_div_time + line_length / 2,
+                           color=df[0], linestyle='solid', linewidth=5.5, label=category)
+                if not added_label:  added_label = True
+
+                mean_div_times.append(mean_div_time)
+                mean_tad_diffs.append(mean_tad_diff)
+
+    plt.scatter(x, y, color='#64b5f6', alpha=0.9,zorder=0,s=100)
+
+    y_labels = {
+        'number': 'TAD Number Difference per Mbp',
+        'borders': 'TAD Border Difference',
+        'conformation': 'TAD Conformation Similarity per Mbp',
+        'edits': 'TAD Edits per Mbp'
+    }
+
+    plt.xlabel('Divergence Time (Million Years)', fontsize=15)
+    plt.ylabel(y_labels.get(plot_type, 'TAD Difference per Mbp'), fontsize=15)
+
     plt.legend()
-    plt.savefig(f'{mode}.png', bbox_inches='tight')
+    plt.grid(color='gray', linewidth=0.15, alpha=0.7)
+    # plt.savefig(f'../images/supplementary/{type}.png', bbox_inches='tight',dpi=600)
+    # plt.savefig(f'../images/supplementary/{type}.svg', bbox_inches='tight')
     plt.show()
 
 def main(type):
@@ -397,18 +455,51 @@ def main(type):
     df.rename(columns=columns_name, inplace=True)
     sb_coord = get_sb_len(species, aln_code)
 
-    rate_per_mb, div_time_dict = calculate_rates(
-        type, tad_sb_df, tad_sb_coord_df, species_list, tree, sb_coord, species_coords, df
-    )
+
+    if type in ["conformation","edits"]:
+        rate_per_mb, div_time_dict,density = calculate_rates(
+            type, tad_sb_df, tad_sb_coord_df, species_list, tree, sb_coord, species_coords, df
+        )
+
+    else:
+        rate_per_mb, div_time_dict = calculate_rates(
+                type, tad_sb_df, tad_sb_coord_df, species_list, tree, sb_coord, species_coords, df
+            )
+
 
     rate_per_mb['TAD_diff_ratio'] = rate_per_mb['TAD_diff_per_mb'] / rate_per_mb['divergence_time']
-    average_ratio = rate_per_mb['TAD_diff_ratio'].median()
+    average_ratio = rate_per_mb['TAD_diff_ratio'].mean()
+
+    if type in ["conformation","edits"]:
+        rate_per_mb['density']= density
+
+        # rate_per_mb['density_avg'] = rate_per_mb['density'].apply(lambda x: sum(x) / len(x))
+        rate_per_mb['density_avg'] = rate_per_mb['density'].apply(lambda x: np.mean(x))
+        overall_avg_density = rate_per_mb['density_avg'].mean()
+        print(f"Overall Average Gene Density: {overall_avg_density}")
 
     print(f"Performing evolutionary rates analysis on {type}")
-    print(rate_per_mb)
-    print(f"Average rate of TAD change: {average_ratio} TADs per Mb per Myr")
-    plt_result( rate_per_mb, mode=type)
+    print(rate_per_mb.sort_values('divergence_time', ascending=True))
 
+    if type == "number":
+        print(f"Average rate of TAD change: {average_ratio} TADs per Mb per Myr")
+
+    else:
+        categories = {"Mammals": ["#CB1B16", rate_per_mb.loc[rate_per_mb['divergence_time'] < 100]],
+                      'Tetrapoda': ["#980E11", rate_per_mb.loc[
+                          (rate_per_mb['divergence_time'] >= 100) & (rate_per_mb['divergence_time'] <= 320)]],
+                      'Vertebrates': ["#65010C", rate_per_mb.loc[rate_per_mb['divergence_time'] > 320]]}
+
+        for category, df in categories.items():
+            if not df[1].empty:
+                mean_tad_diff = df[1]['TAD_diff_per_mb'].median()
+                if type in ["conformation","edits"]:
+                    mean_avg_density = df[1]['density_avg'].median()
+                    print(category, round(mean_tad_diff,2),round(mean_avg_density,2))
+                else:
+                    print(category, round(mean_tad_diff,2))
+
+    plt_result( rate_per_mb,type)
 
 if __name__ == "__main__":
     for type in ["edits"]:
