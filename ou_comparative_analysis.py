@@ -10,12 +10,12 @@ import pandas as pd
 from numpy.linalg import inv
 from scipy.stats import linregress
 from itertools import product,combinations
+from matplotlib.patches import Rectangle
+
 
 from ete3 import Tree
 import seaborn as sns
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-
 
 sns.set_style("whitegrid")
 sns.set_context("paper")
@@ -35,7 +35,7 @@ def get_code_conversion(code):
     assert isinstance(code, object)
     return alignment_code_to_species.get(code)
 
-def get_sb_len(species, aln, path="/Users/fabianpa/Desktop/new_sequences/synteny_3/synteny_bed"):
+def get_sb_len(species, aln, path="synteny_bed"):
     sb_dfs = []
     for common_name in species:
         fname = os.path.join(path, common_name + "_" + aln + ".bed")
@@ -46,12 +46,11 @@ def get_sb_len(species, aln, path="/Users/fabianpa/Desktop/new_sequences/synteny
     return pd.concat(sb_dfs, axis=0)
 
 def get_tad_in_sb(species, aln, sb_coord, sb_specific_aln=None, shuffle=False,
-                  coord_path="/Users/fabianpa/Desktop/new_sequences/sb_in_tad_3/"):
+                  coord_path="sb_in_tad_3/"):
     count_df = []
     coord_df = []
     for common_name in species:
         coord_fname = os.path.join(coord_path, f"{common_name.lower()}_{aln}.tad.sb")
-        # coord_fname = os.path.join(coord_path, f"{common_name.lower()}_{aln}.tad.sb.bed")
         specie_aln_name = common_name.lower() + "_" + aln
         try:
             sb_tad_coord = \
@@ -80,7 +79,7 @@ def get_tad_in_sb(species, aln, sb_coord, sb_specific_aln=None, shuffle=False,
             raise FileNotFoundError(f"File not found: {e.filename}")
     return count_df, coord_df
 
-def get_cynteny_df(aln_name, aln_path='/Users/fabianpa/Desktop/new_sequences/synteny_3/'):
+def get_cynteny_df(aln_name, aln_path='synteny_3/'):
     aln_fname = os.path.join(aln_path, aln_name + ".synteny")
     with open(aln_fname, 'r') as synteny_file:
         synteny = synteny_file.read()
@@ -354,23 +353,21 @@ def grid_search(tree, datasets, alpha_values, sigma_values, aln_codes):
 
 def plot_heatmap_loglik(result,best_alpha,best_sigma):
     sns.set_style("white")
+
     f, ax = plt.subplots(figsize=(19, 16))
     df = result.groupby(['alpha','sigma'])["likelihood"].sum().reset_index()
     heatmap_df = df.pivot(index="alpha", columns="sigma", values="likelihood")
     best_result = df.loc[df['likelihood'].idxmax()]
     idx_alpha = heatmap_df.index.get_loc(best_alpha)
     idx_sigma = heatmap_df.columns.get_loc(best_sigma)
-    best_ll_alpha_idx = heatmap_df.index.get_loc(best_result.alpha)
-    best_ll_sigma_idx = heatmap_df.columns.get_loc(best_result.sigma)
+    sns.heatmap(heatmap_df, annot=True, fmt='.1f', cmap='coolwarm',square=True,cbar_kws={"shrink": .85}, annot_kws={"size": 15},ax=ax)
+    ax.add_patch( Rectangle((idx_sigma, idx_alpha), 1, 1, fill=False, edgecolor='black', linewidth=2.5))
 
-    sns.heatmap(heatmap_df, annot=True, fmt='.1f', cmap='coolwarm',square=True,cbar_kws={"shrink": 1},ax=ax)
-    ax.add_patch( Rectangle((idx_sigma, idx_alpha), 1, 1, fill=False, edgecolor='black', linewidth=4))
-    # ax.add_patch( Rectangle((best_ll_sigma_idx,best_ll_alpha_idx), 1, 1, fill=False, edgecolor='blue', linewidth=4))
+    plt.xlabel('Sigma',fontsize=25)
+    plt.ylabel('Alpha',fontsize=25)
+    plt.title('Summed Likelihood Heatmap',fontsize=25)
+    plt.tick_params(axis='both', which='major', labelsize=18)
 
-    plt.xlabel('Sigma')
-    plt.ylabel('Alpha')
-    plt.title('Summed Likelihood Heatmap')
-    # plt.savefig("../images/heat_loglik.png",bbox_inches='tight')
     plt.show()
 
 def plot_heatmap_alpha_sigma(result):
@@ -388,30 +385,29 @@ def plot_heatmap_alpha_sigma(result):
     idx_alpha = heatmap_df.index.get_loc(best_alpha)
     idx_sigma = heatmap_df.columns.get_loc(best_sigma)
 
-    # print(tabulate(heatmap_df, headers='keys', tablefmt='psql'))
-
     ax.tick_params(length=0)
-    ax = sns.heatmap(heatmap_df, annot=True, fmt='.1f', cmap='coolwarm',ax=ax,square=True,cbar_kws={"shrink": 1})
-    ax.add_patch( Rectangle((idx_sigma, idx_alpha), 1, 1, fill=False, edgecolor='black', linewidth=4))
-    plt.xlabel('Sigma')
-    plt.ylabel('Alpha')
-    plt.title('Heatmap of counts for alpha, sigma pairs')
-    # plt.savefig("../images/figure 6/heat_a_s_count.png", bbox_inches='tight')
+    ax = sns.heatmap(heatmap_df, annot=True, fmt='.1f', cmap='coolwarm',ax=ax,square=True,cbar_kws={"shrink": .75}, annot_kws={"size": 15})
+    ax.add_patch( Rectangle((idx_sigma, idx_alpha), 1, 1, fill=False, edgecolor='black', linewidth=2.5))
+    plt.xlabel('Sigma',fontsize=25)
+    plt.ylabel('Alpha',fontsize=25)
+    plt.title('Heatmap of counts for alpha, sigma pairs',fontsize=25)
+    plt.tick_params(axis='both', which='major', labelsize=18)
+
     plt.show()
     return best_alpha,best_sigma
 
 def plot_cum_loglik_heatmap(matrix, alpha_values, sigma_values):
     f, ax = plt.subplots(figsize=(19, 16))
-    idx_alpha,idx_sigma = np.unravel_index(np.argmax(matrix), matrix.shape)
-
     print(tabulate(matrix, headers='keys', tablefmt='psql'))
 
-    sns.heatmap(matrix, xticklabels=sigma_values, yticklabels=alpha_values, annot=True,vmin = -20000, vmax = -6000, square=True,cmap='coolwarm', fmt='.1f',ax=ax,cbar_kws={"shrink": .65})
-    ax.add_patch(Rectangle((idx_sigma, idx_alpha), 1, 1, fill=False, edgecolor='black', linewidth=4))
-    plt.title("Cumulative Log Likelihood Heatmap")
-    plt.xlabel("Sigma Values")
-    plt.ylabel("Alpha Values")
-    # plt.savefig("../images/figure 6/heat_cumulative_loglik.png", bbox_inches='tight')
+    heatmap = sns.heatmap(matrix, xticklabels=sigma_values, yticklabels=alpha_values, annot=False,vmin = -20000, vmax = -6000, square=True,cmap='coolwarm', fmt='%d',
+                          ax=ax,cbar_kws={"shrink": .75,'label': 'Cumulative loglik'},annot_kws={"size": 15})
+
+    plt.title("Cumulative Log Likelihood Heatmap",fontsize=30)
+    plt.xlabel("Sigma Values",fontsize=30)
+    plt.ylabel("Alpha Values",fontsize=30)
+    plt.tick_params(axis='both', which='major', labelsize=25)
+
     plt.show()
 
 def get_slope(result,tad_sb_df,tree):
@@ -504,13 +500,12 @@ def plot_couple_values(result,tad_sb_df,tree):
         else:
             fig.delaxes(ax)
 
-    #     # plt.legend(ncol=2, bbox_to_anchor=(1, 1))
     plt.tight_layout()
-    # plt.savefig("ou_fitting.png")
     plt.show()
 
-def plot_half_life(result_df):
+def plot_half_life(result_df,alpha_values):
     sns.set_style("white")
+    plt.figure(figsize=(6.4, 4.8))
     #Plot half life
     fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True, gridspec_kw={'width_ratios': [3, 1]})
     fig.subplots_adjust(wspace=0.09)  # Adjust space between plots
@@ -534,26 +529,53 @@ def plot_half_life(result_df):
     ax2.plot((-d, +d), (-d, +d), **kwargs)
 
     # Add axis labels
-    ax1.set_xlabel('                            Half Life')
+    ax1.set_xlabel('                            Half Life',fontsize=15)
     ax2.set_xlabel('')
-    ax1.set_ylabel('Frequency')
-    # plt.savefig("../images/figure 6/half_life.png", bbox_inches='tight')
+    ax1.set_ylabel('Frequency',fontsize=15)
+
+    plt.show()
+
+def plot_half_life_bar(result_df, alpha_values):
+    sns.set_style("white")
+    plt.figure(figsize=(8, 6))
+
+    plot_data = []
+
+    for alpha in alpha_values:
+        counts = result_df['half_life'].value_counts().reset_index()
+        counts.columns = ['half_life', 'count']
+        counts['alpha'] = alpha
+
+        plot_data.append(counts)
+
+    plot_df = pd.concat(plot_data)
+    sns.barplot(x='half_life', y='count', data=plot_df)
+
+    plt.xlabel('Half Life', fontsize=15)
+    plt.ylabel('Count', fontsize=15)
+
+    plt.show()
+
+def plot_alpha_bar(result_df, alpha_values):
+    sns.set_style("white")
+    plt.figure(figsize=(8, 6))
+
+    plot_data = []
+
+    counts = result_df['alpha'].value_counts().reset_index()
+
+    # plot_df = pd.concat(plot_data)
+    sns.barplot(x='alpha', y='count', data=counts)
+    plt.xlabel('Alpha Values', fontsize=15)
+    plt.ylabel('Count', fontsize=15)
+    plt.savefig("alpha_bar.png", bbox_inches='tight', dpi=600)
     plt.show()
 
 def plot_correlation(result_df):
     sns.displot(result_df, x="theta", kind="kde")
-    # pairgrid = sns.pairplot(result_df, vars=['alpha', 'sigma','slope'], corner=True)
-    # pairgrid.fig.suptitle("PairGrid of Selected Variables", y=1.02)
-    # plt.savefig("pairgrid_a_s_theta_slope.png",bbox_inches='tight')
+    # plt.savefig("half_life.png",bbox_inches='tight')
+    # plt.savefig("half_life.svg",bbox_inches='tight')
     plt.show()
-
-def get_OU_block(result_df):
-
-    def contains_zero(ci):
-        return ci[0] <= 0 <= ci[1]
-
-    # Filter rows where CI does not contain 0
-    df_filtered = result_df[~result_df['CI'].apply(contains_zero)]
 
 def process_tad_genes(aln_number,aln="hrmrrcspcd"):
     coord_path = "/Users/fabianpa/Desktop/new_sequences/coord"
@@ -579,6 +601,51 @@ def process_tad_genes(aln_number,aln="hrmrrcspcd"):
     result = pd.DataFrame(avg_gene_x_tad_df, columns=["count", "species"])
     return result
 
+def get_genes_in_aln(aln_number,aln="hrmrrcspcd"):
+    all_aln, species = get_cynteny_df(aln)
+    reform = {(outerKey, innerKey): values for outerKey, innerDict in all_aln.items() for innerKey, values in
+              innerDict.items()}
+    df = pd.DataFrame.from_dict(reform, orient='index').transpose()
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    column_n = list(range(1, len(df['Alignment1'].columns), 2))
+    columns_name = {column_n[i]: species[i] for i in range(len(column_n))}
+    df.rename(columns=columns_name, inplace=True)
+    df_filtered = df[aln_number]
+    return df_filtered
+
+def block_stat(aln_number,sb_coord,tad_sb_df):
+    genes = get_genes_in_aln(aln_number)
+
+    long_life = genes.xs("human", level=1, axis=1).copy()
+    long_life[aln_number] = long_life[aln_number].replace('-', pd.NA)
+    mean_genes = [ ]
+    mean_count_per_mb = []
+    avg_tad_n = []
+    avg_tad_n_per_mb = []
+
+    for i in aln_number:
+        n_genes = len(long_life[i].dropna())
+        mean_genes.append(n_genes)
+        sb_len = sb_coord.loc[(sb_coord['species'] == "human") & (sb_coord['aln'] == i), "sb_length"].values[
+                     0] / 1e6
+        tad_n = tad_sb_df.loc[(tad_sb_df.aln == i) & (tad_sb_df.species == "human"), ["count"]].values[0]
+        count_per_mb = n_genes/sb_len
+        mean_count_per_mb.append(count_per_mb)
+        avg_tad_n.append(tad_n)
+        avg_tad_n_per_mb.append(tad_n/sb_len)
+
+    return  len(aln_number),round(np.median(mean_genes),2),round(np.median(mean_count_per_mb),2),round(np.median(avg_tad_n),2),round(np.median(avg_tad_n_per_mb),2)
+
+def get_go_input(genes,out="high_half_life_genes.csv"):
+    genes = genes.xs("human", level=1, axis=1).values.flatten()
+
+    filtered_genes = [x.split("_")[0] for x in genes if not pd.isna(x) and x!='-']
+
+    # print(filtered_genes)
+    # with open(out, 'w') as output:
+    #     for item in filtered_genes:
+    #         output.write("{}\n".format(item))
+
 def main(species_aln,mode="count"):
 
     tree = Tree("mammals_tree_mya.nw", format=1)
@@ -589,39 +656,21 @@ def main(species_aln,mode="count"):
 
     tad_sb_list, tad_sb_coord_list = get_tad_in_sb(species, species_aln, sb_coord)
     tad_sb_df = pd.concat(tad_sb_list, axis=0)
-    # tad_sb_df.aln = tad_sb_df.aln.apply(lambda x: "sb_{}".format(int(x.split("Alignment")[1])))
     tad_sb_df.sort_values(by='aln', inplace=True)
+
 
     datasets=[]
 
-    # aln_codes=['sb_7','sb_12','sb_15','sb_20','sb_22','sb_24','sb_29','sb_32','sb_40','sb_41','sb_44']
-    # aln_codes=['sb_7','sb_12','sb_15','sb_22','sb_23','sb_24','sb_40','sb_167']
-    # aln_codes =['sb_7', 'sb_12', 'sb_15', 'sb_22', 'sb_23', 'sb_40', 'sb_44', 'sb_167', 'sb_204']
-
-    # aln_codes = ['sb_12', 'sb_130', 'sb_134', 'sb_141', 'sb_149', 'sb_197', 'sb_200', 'sb_218', 'sb_220',
-    #              'sb_247', 'sb_254', 'sb_256', 'sb_275', 'sb_293', 'sb_295', 'sb_304', 'sb_305', 'sb_315',
-    #              'sb_321', 'sb_337', 'sb_351', 'sb_353', 'sb_375', 'sb_377', 'sb_392', 'sb_401', 'sb_419',
-    #              'sb_426', 'sb_431', 'sb_438', 'sb_464', 'sb_493', 'sb_498', 'sb_68', 'sb_78', 'sb_95']
-
     aln_codes=tad_sb_df.aln.unique()[:]
-    # start = 1
-    # aln_codes=[f"sb_{num}" for num in range(start, start+20) ]
+    for aln in tqdm(aln_codes,"Getting average gene per TAD....", colour="blue"):
 
-    # for aln in aln_codes:
-    for aln in tqdm(aln_codes[:],"Getting average gene per TAD....", colour="blue"):
         if mode == "count": count = tad_sb_df.loc[tad_sb_df.aln == aln, ["count", "species"]]
         else: count = process_tad_genes(aln)
+
         # Check that the order of the species is the same as the species in the tree's leaf names
         count['species'] = pd.Categorical(count['species'], categories=species_nodes, ordered=True)
         count_sorted = count.sort_values(by='species')
         datasets.append(count_sorted["count"].values)
-
-
-    # alpha_values = np.round(np.logspace(-2, 1, num=10),2)
-    # sigma_values = np.round(np.logspace(-2, 1, num=10),2)
-    # alpha_values = [ 0.01,  0.09,  0.17,  0.26,  0.34,  0.67,  1.,  2.,  3.6,  5.2,  6.8,  8.4,  10.]
-    # alpha_values = [0.01, 0.34, 0.67, 1.0, 2.0, 3.6, 5.2, 6.8, 8.4, 10.0]
-    # sigma_values = [ 0.01,  0.34,  0.67,  1.,    2.,    3.6,   5.2,   6.8,   8.4,  10.  ]
 
     alpha_values = [ 0.01,  0.09,  0.17,  0.26,  0.34,  0.67,  1.,  2.,  3.6,  5.2,  6.8,  8.4,  10.]
     sigma_values = [ 0.01,  0.54, 1.06, 1.59,  2.11,  2.64, 3.16,  3.69,  4.22,  4.74,  5.27, 5.79,
@@ -629,24 +678,33 @@ def main(species_aln,mode="count"):
 
     result,cumulative_log_likelihood_matrix = grid_search(tree, datasets, alpha_values,sigma_values,aln_codes)
     result_df = pd.DataFrame(result,columns=["aln","alpha","sigma","theta","likelihood"])
-    # slopes = get_slope(result, tad_sb_df, tree)
 
     # Calculate half-life and stationary variance
-
-    result_df['half_life'] = np.log(2) / result_df['alpha']
+    result_df['half_life'] = round(np.log(2) / result_df['alpha'],2)
     result_df['stationary_variance'] = result_df['sigma'] ** 2 / (2 * result_df['alpha'])
-    # result_df = pd.merge(result_df, slopes, how='right', left_index=False, right_index=False)
-    print(round(np.median(result_df.loc[result_df['half_life']>=60,"half_life"]),2))
 
-    # print(result_df.loc[result_df['half_life']>=60,"half_life"])
-    # get_OU_block(result_df)
-    # plot_half_life(result_df)
-    # plot_correlation(result_df)
+    #Plot Results
+    plot_alpha_bar(result_df,alpha_values)
+    plot_half_life_bar(result_df,alpha_values)
+    plot_correlation(result_df)
 
-    # plot_couple_values(result,tad_sb_df,tree)
-    # best_alpha,best_sigma = plot_heatmap_alpha_sigma(result_df)
-    # plot_heatmap_loglik(result_df,best_alpha,best_sigma)
-    # plot_cum_loglik_heatmap(cumulative_log_likelihood_matrix, alpha_values, sigma_values)
+    plot_couple_values(result,tad_sb_df,tree)
+    best_alpha,best_sigma = plot_heatmap_alpha_sigma(result_df)
+    plot_heatmap_loglik(result_df,best_alpha,best_sigma)
+    plot_cum_loglik_heatmap(cumulative_log_likelihood_matrix, alpha_values, sigma_values)
+
+    # Get block statistic for each half life
+    half_life_statistic = []
+    for half_life in  result_df['alpha'].unique():
+        aln_number = result_df.loc[result_df['alpha'] == half_life, "aln"].tolist()
+
+        n_blocks,mean_n_genes,count_per_mb,avg_tad_n,avg_tad_n_per_mb = block_stat(aln_number,sb_coord,tad_sb_df)
+        half_life_statistic.append([half_life,n_blocks,mean_n_genes,count_per_mb,avg_tad_n,avg_tad_n_per_mb])
+
+    half_life_statistic_df = pd.DataFrame(half_life_statistic,columns=["half_life","n_blocks","avg_n_genes","avg_ngenes_mb","avg_tad_n","avg_tad_n_per_mb"]).sort_values(by='half_life', ascending=True)
+    print(half_life_statistic_df)
+    half_life_statistic_df.to_csv("../images/supplementary/ou_block_stat.1.csv")
+    # get_go_input(genes, out="high_half_life_genes.csv")
 
 if __name__ == "__main__":
     aln = "hrmrrcspcd"
