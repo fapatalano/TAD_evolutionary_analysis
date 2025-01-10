@@ -7,7 +7,6 @@ from itertools import combinations
 import pandas as pd
 import numpy as np
 import multiprocessing
-from scipy.optimize import curve_fit
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -19,34 +18,20 @@ sns.set_context("paper")
 div_time = {'mr': 13.10, 'cs': 24.60,'hr': 28.82, 'cd': 55.4, 'csp': 61.8,'cspcd': 76.0,'mrr': 79.0,  'hrmrr': 87.2,
             'hrmrrcspcd': 94.0, 'hrmrrcspcdc': 318.9, 'hrmrrcspcdcz': 429.0}
 
-colors = {'mr': "#033270",
-          'cs': "#1368AA",
-          'hr': "#4091C9",
-          'cd': "#4AA8CD",
-          'csp': "#BA746B",
-          'cspcd': "#F29479",
-          'mrr': "#F26A4F",
-          'hrmrr': "#EF3C2D",
-          'hrmrrcspcd': "#CB1B16",
-          'hrmrrcspcdc': "#980E11",
-          'hrmrrcspcdcz': "#65010C"
+species_mapping = {'hr':'primates','mr':'rodents','cs':'cattle','cd':'carnivores','csp':'ungulates','cspcd':'laurasians','mrr':'glires','hrmrr':'eurarchontoglires','hrmrrcspcd':'mammals','hrmrrcspcdc':'tetrapods',"hrmrrcspcdcz":"vertebrates"}
+colors = {'rodents': "#033270",
+          'cattle': "#1368AA",
+          'primates': "#4091C9",
+          'carnivores': "#4AA8CD",
+          'ungulates': "#BA746B",
+          'laurasians': "#F29479",
+          'glires': "#F26A4F",
+          'eurarchontoglires': "#EF3C2D",
+          'mammals': "#CB1B16",
+          'tetrapods': "#980E11",
+          'vertebrates': "#65010C"
           }
-
 colors_sorted = {i:colors[i] for i in colors.keys() }
-
-alignment_code_to_species_legend = {
-    'mr': 'Mouse/Rat',
-    'cs': 'Cow/Sheep',
-    'hr': 'Human/Rhesus',
-    'cd': 'Cat/Dog',
-    'csp': 'Pig/Cow/Sheep',
-    'cspcd': 'Pig/Cow/Sheep/Dog/Cat',
-    'mrr': 'Mouse/Rabbit/Rat',
-    'hrmrr': 'Human/Mouse/Rhesus/Rabbit/Rat',
-    'hrmrrcspcd': 'Mammals',
-    'hrmrrcspcdc': 'Mammals/Chicken',
-    'hrmrrcspcdcz': 'Mammals/Chicken/Zebrafish'
-}
 
 def get_code_conversion(code):
     alignment_code_to_species = {'hr': 'human;rhesus',
@@ -74,7 +59,7 @@ def read_coord_file(fname):
     coord.close()
     return coord_dict
 
-def get_cynteny_df(aln_name, aln_path='/Users/fabianpa/Desktop/new_sequences/synteny_3/'):
+def get_cynteny_df(aln_name, aln_path='synteny/'):
     aln_fname = os.path.join(aln_path, aln_name + ".synteny")
     with open(aln_fname, 'r') as synteny_file:
         synteny = synteny_file.read()
@@ -105,12 +90,11 @@ def get_sb_len(species,aln,path="/Users/fabianpa/Desktop/new_sequences/synteny_3
         sb_dfs.append(sb_df)
     return pd.concat(sb_dfs, axis=0)
 
-def get_tad_in_sb(species, aln, coord_path="/Users/fabianpa/Desktop/new_sequences/sb_in_tad_3/"):
+def get_tad_in_sb(species, aln, coord_path="sb_in_tad/"):
     count_df = []
     coord_df = []
     for common_name in species:
         coord_fname = os.path.join(coord_path, f"{common_name.lower()}_{aln}.tad.sb")
-        # coord_fname = os.path.join(coord_path, f"{common_name.lower()}_{aln}.tad.sb.bed")
         try:
             sb_tad_coord = \
                 pd.read_csv(coord_fname, sep="\t", usecols=[5, 6, 7, 3, 4],
@@ -189,13 +173,13 @@ def get_tad_number(gene_inters, tad_s1, tad_s2, gene_coords, species, mode="inte
             if idx_1 is not None and idx_2 is not None:
                 gene_distribution[0][idx_1].append(g1)
                 gene_distribution[1][idx_2].append(g2)
-    print(gene_distribution)
+
     return gene_distribution
 
 def calculate_edit_dist(alignments, tads, species, gene_coords, shuffle=False):
     edit_count = []
 
-    for i, alignment_number in enumerate(tads.aln.unique()[:1]):
+    for i, alignment_number in enumerate(tads.aln.unique()[:]):
         n_edit = 0
         aln = alignments[alignment_number].dropna()
 
@@ -241,7 +225,7 @@ def calculate_edit_dist(alignments, tads, species, gene_coords, shuffle=False):
     return np.mean(edit_count) if edit_count else None
 
 def process_alignment(aln, shuffle=False):
-    coord_path = "/Users/fabianpa/Desktop/new_sequences/coord"
+    coord_path = "coord"
 
     all_aln, species = get_cynteny_df(aln)
     reform = {(outerKey, innerKey): values for outerKey, innerDict in all_aln.items() for innerKey, values in
@@ -265,7 +249,7 @@ def process_alignment(aln, shuffle=False):
     edit_ops_rdm = []
     for i in comb:
         if shuffle:
-            for _ in range(10):
+            for _ in range(1000):
                 n_edit_combo_rdm = calculate_edit_dist(df, tad_sb_coord_df, i, species_coords,
                                                        shuffle=True)
                 if n_edit_combo_rdm is not None: edit_ops_rdm.append(n_edit_combo_rdm)
@@ -274,119 +258,54 @@ def process_alignment(aln, shuffle=False):
             if n_edit_combo is not None: edit_ops.append(n_edit_combo)
 
     if shuffle:
-        return [aln, div_time[aln], np.mean(edit_ops_rdm)]
+        return [aln, div_time[aln], np.mean(edit_ops_rdm),edit_ops_rdm]
     else:
         return [aln, div_time[aln], np.mean(edit_ops)]
 
 def plot_scatter_fitted(edit_operations_df):
-    def power_law(x, a, b):
-        return a * np.power(x, b)
-
-    x_data = edit_operations_df["mya"]
-    y_data = edit_operations_df["edit_ratio"]
 
     plt.figure(figsize=(15, 11))
-
-    if len(edit_operations_df)>1:
-        params, covariance = curve_fit(power_law, x_data, y_data)
-        a, b = params
-
-        # Generate the fitted curve and confidence interval curve
-        x_fit = np.linspace(min(x_data), max(x_data), 100)
-        y_fit = power_law(x_fit, a, b)
-        sns.lineplot(x=x_fit, y=y_fit, color='grey', linestyle="-.", label='Fitted Curve')
 
     plt.axhline(y=1, color='r', linestyle="--", label='Reference Line')
 
     # Scatter plot for data points
-    sns.scatterplot(x=edit_operations_df["mya"], y=edit_operations_df["edit_ratio"], hue=edit_operations_df.alignment,
+    sns.scatterplot(x=edit_operations_df["mya"], y=edit_operations_df["ratio"], hue=edit_operations_df.alignment,
                     palette=list(colors_sorted.values()), s=90)
 
     # Add labels and legend
     plt.xlabel("Time (Million Years Ago)", fontsize=18)
-    plt.ylabel("Gene-TAD vs. Gene-Shuffled TAD Edit Operation Ratio", fontsize=18)
-    handles, labels = plt.gca().get_legend_handles_labels()
-    labels = [
-        f"{label}:{alignment_code_to_species_legend[label]}" if label in alignment_code_to_species_legend.keys() else label
-        for label in labels]
-    plt.legend(handles=handles[:], labels=labels[:], bbox_to_anchor=(1.5, 0.6), borderaxespad=0, frameon=False,
-               fontsize=18)
-    plt.savefig("../images/figure 5/edit_ops_fitted.png", bbox_inches='tight')
+    plt.ylabel("Gene-TAD vs. Gene-Shuffled TAD Edit Distance Ratio", fontsize=18)
+
     plt.show()
 
-def plot_scatter(edit_operations_df):
+def plot_pval_distr(merged_df):
+    ncols = 3
+    nrows = (len(merged_df.alignment) + ncols - 1) // ncols
 
-    print("Plotting Mean score...")
-    fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True,figsize=(15,11))
-    ax1.axhline(y=1, color='r', linestyle="--",label="Reference Line")
-    ax2.axhline(y=1, color='r', linestyle="--",label="Reference Line")
-    fig.subplots_adjust(wspace=0.06)  # adjust space between axes
-    sns.scatterplot(data=edit_operations_df, x="mya", y="edit_ratio", hue="alignment", ax=ax1, legend=False,
-                    palette=list(colors_sorted.values()),s=100)
-    sns.scatterplot(data=edit_operations_df, x="mya", y="edit_ratio", hue="alignment", legend=True, ax=ax2,
-                    palette=list(colors_sorted.values()),s=100)
-    ax1.set_xlim(0, 100)  # most of the data
-    ax2.set_xlim(290, 450)  # outliers only
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 15))
+    axes = axes.flatten()
 
-    ax1.spines.right.set_visible(False)
-    ax1.spines.top.set_visible(False)
-    ax2.spines.left.set_visible(False)
-    ax2.spines.right.set_visible(False)
-    ax2.spines.top.set_visible(False)
+    for idx, (ax, (_, row)) in enumerate(zip(axes, merged_df.iterrows())):
+        alignment = row["alignment"]
+        mmr_distr = row["edit_ops_distr"]
+        mmr_actual = row["edit_ops_actual"]
+        # sns.histplot(mmr_distr, color="skyblue", label="Edit Distance Random Distribution", ax=ax)
+        sns.kdeplot(mmr_distr, color="skyblue", label="Edit Distance Random Distribution", ax=ax,)
+        ax.axvline(x=mmr_actual, color="red", linestyle="--", label=f"Edit Distance Actual = {round(mmr_actual, 2)}")
+        ax.set_title(alignment)
+        ax.legend(fontsize=15)
+        ax.set_xlabel("Random Edit Distance Values", fontsize=15)
+        ax.set_ylabel("Frequency", fontsize=15)
+        # ax.set_xlim(0, 1)
 
-    d = 1  # proportion of vertical to horizontal extent of the slanted line
-    kwargs = dict(marker=[(-1, -d), (1, d)], markersize=8,
-                  linestyle="none", color='k', mec='k', mew=1, clip_on=False)
-    ax1.plot([1, 1], [0, 0], transform=ax1.transAxes, **kwargs,label=False)
-    ax2.plot([0, 0], [0, 0], transform=ax2.transAxes, **kwargs,label=False)
+    # Hide empty subplots
+    for ax in axes[len(merged_df):]:
+        ax.axis("off")
 
-    ax1.set_xlabel(
-        "                                                                                  Time (Million Years Ago)",fontsize=18)
-    ax1.set_ylabel("Gene-TAD vs. Gene-Shuffled TAD Edit Operation Ratio",fontsize=18)
-    ax2.set(xlabel="", ylabel="")
-
-    # ax1.lines[0].set_label('_nolegend_')
-    # ax2.lines[0].set_label('_nolegend_')
-    # ax2.lines[1].set_label('_nolegend_')
-
-    ax1.yaxis.set_tick_params(labelsize=18)
-    ax1.xaxis.set_tick_params(labelsize=18)
-    ax2.xaxis.set_tick_params(labelsize=18)
-
-    handles, labels = plt.gca().get_legend_handles_labels()
-    labels = [
-        f"{label}:{alignment_code_to_species_legend[label]}"  for label in labels if label in alignment_code_to_species_legend.keys()]
-    labels = ["Reference Line"]+labels
-    plt.legend(handles=handles[:], labels=labels[:], bbox_to_anchor=(2, 0.6), borderaxespad=0, frameon=False,
-               fontsize=18)
-
-    # legend_labels=["Alignment"]+legend_labels
-    # plt.legend(labels=legend_labels, borderaxespad=0, frameon=False,bbox_to_anchor=(1.4, 0.6))
-    # plt.savefig("./images/edit_ops.png", bbox_inches='tight')
+    plt.tight_layout()
+    plt.savefig("edit_dist_pval.svg", bbox_inches='tight')
+    plt.savefig("edit_dist_pval.png", bbox_inches='tight', dpi=600)
     plt.show()
-
-def main():
-
-    start_time = time.time()
-
-    pool = multiprocessing.Pool()
-
-    results = pool.map(process_alignment_wrapper, div_time.keys())
-    # rdm_results = pool.map(process_rdm_alignment_wrapper, div_time.keys())
-
-    pool.close()
-    pool.join()
-
-    end_time = time.time()
-    print(f"Total time taken: {end_time - start_time} seconds")
-    edit_operations_df = pd.DataFrame(results, columns=['alignment', 'mya', 'edit_ops'])
-    # rdm_edit_operations_df = pd.DataFrame(rdm_results, columns=['alignment', 'mya', 'edit_ops'])
-    # merged_df = edit_operations_df.merge(rdm_edit_operations_df, on=['alignment', 'mya'],
-    #                                       suffixes=('_actual', '_random'))
-    # merged_df['edit_ratio'] = merged_df['edit_ops_actual'] / merged_df['edit_ops_random']
-    # print(tabulate(merged_df, headers='keys', tablefmt='psql'))
-    # plot_scatter_fitted(merged_df)
-    # plot_scatter(merged_df)
 
 def process_alignment_wrapper(aln):
     print(f"Processing Alignments - {aln}")
@@ -398,29 +317,44 @@ def process_rdm_alignment_wrapper(aln):
     rdm_result = process_alignment(aln,True)
     return rdm_result
 
-# def main():
-#     # outer_pbar = tqdm(div_time.keys(), position=0, leave=True)
-#     # outer_pbar_rdm = tqdm(div_time.keys(), position=0, leave=True)
-#     edit_operations = []
-#     # edit_operations_rdm = []
+def main():
 
-#     results = []
-#     start_time = time.time()
-#     for aln in div_time.keys():
-#         print(f"Processing Alignments - {aln}")
-#         result = process_alignment(aln)
-#         edit_operations.append(result)
-#
-#     # for aln_rdm in outer_pbar:
-#     #     result_rdm = process_alignment(aln_rdm, shuffle=True)
-#     #     print(result_rdm)
-#     #     # edit_operations_rdm.append(result_rdm)
-#     end_time = time.time()
-#     print(f"Total time taken: {end_time - start_time} seconds")
-#     edit_operations_df = pd.DataFrame(edit_operations, columns=['alignment', 'mya', 'edit_ops'])
-#     print(edit_operations_df)
-    # edit_operations_rdm_df = pd.DataFrame(edit_operations_rdm, columns=['alignment', 'mya', 'edit_ops'])
-    # plot_scatter(edit_operations_df)
+    start_time = time.time()
+
+    pool = multiprocessing.Pool()
+
+    results = pool.map(process_alignment_wrapper, div_time.keys())
+    rdm_results = pool.map(process_rdm_alignment_wrapper, div_time.keys())
+
+    pool.close()
+    pool.join()
+
+    end_time = time.time()
+    print(f"Total time taken: {end_time - start_time} seconds")
+
+    edit_operations_df = pd.DataFrame(results, columns=['alignment', 'mya', 'edit_ops'])
+    rdm_edit_operations_df = pd.DataFrame(rdm_results, columns=['alignment', 'mya', 'edit_ops','edit_ops_distr'])
+
+    merged_df = edit_operations_df.merge(rdm_edit_operations_df, on=['alignment', 'mya'],
+                                          suffixes=('_actual', '_random'))
+    merged_df['ratio'] = merged_df['edit_ops_actual'] / merged_df['edit_ops_random']
+    merged_df["alignment"] = merged_df["alignment"].replace(species_mapping)
+
+    def filter_list(row):
+        if row['alignment'] == 'tetrapods':
+            return [value for value in row['edit_ops_distr'] if value > 9]
+        elif row['alignment'] == 'vertebrates':
+            return [value for value in row['edit_ops_distr'] if value > 5]
+        else:
+            return row['edit_ops_distr']
+
+    merged_df['edit_ops_distr'] = merged_df.apply(filter_list, axis=1)
+
+    X = merged_df[['alignment','edit_ops_actual','edit_ops_random', 'ratio']]
+    print(tabulate(X, headers='keys', tablefmt='psql'))
+
+    plot_pval_distr(merged_df)
+    # plot_scatter_fitted(merged_df)
 
 if __name__ == "__main__":
     main()
